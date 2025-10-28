@@ -62,7 +62,7 @@ class Dashboard:
     
     def create_top_tokens_table(self, tokens: List[Token]) -> Table:
         """Create a table showing top tokens with extended metrics including ML insights."""
-        table = Table(title="TOP ACTIVE TOKENS - ML ENHANCED", show_header=True, header_style="bold magenta")
+        table = Table(title="TOP ACTIVE TOKENS - ML ENHANCED (DexScreener links in console)", show_header=True, header_style="bold magenta")
 
         table.add_column("#", style="dim", width=3)
         table.add_column("Symbol", style="cyan", no_wrap=True, width=8)
@@ -74,6 +74,7 @@ class Dashboard:
         table.add_column("Quick Profit", justify="center", style="bold yellow", width=12)
         table.add_column("Rug Risk", justify="center", style="bold red", width=9)
         table.add_column("Status", style="white", width=10)
+        table.add_column("Verify", style="dim", width=50)
 
         for i, token in enumerate(tokens[:20], 1):
             metadata = token.token_metadata or {}
@@ -144,6 +145,9 @@ class Dashboard:
                 status = "⚠ RISKY"
                 row_style = "red"
 
+            # DexScreener link for verification
+            dexscreener_link = f"dexscreener.com/solana/{token.mint_address}"
+
             table.add_row(
                 str(i),
                 token.symbol or "UNK",
@@ -155,6 +159,7 @@ class Dashboard:
                 Text(quick_profit_text, style=quick_profit_style),
                 Text(rug_risk_text, style=rug_risk_style),
                 status,
+                Text(dexscreener_link, style="dim blue"),
                 style=row_style
             )
 

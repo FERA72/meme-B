@@ -84,40 +84,88 @@ class MultiSourceDiscovery:
         self, session: aiohttp.ClientSession
     ) -> List[Dict]:
         """
-        Discover newest pairs from DexScreener.
-        This is our PRIMARY discovery source.
+        Discover HOT/TRENDING tokens from DexScreener.
+        This gets REAL tokens that are trading NOW.
         """
         await self._check_rate_limit("dexscreener")
 
-        url = "https://api.dexscreener.com/latest/dex/tokens"
-
         try:
-            # Get latest tokens across all chains, filter for Solana
+            # Get trending pairs for Solana - these are REAL active tokens
             data = await self.http.get_json(
-                "https://api.dexscreener.com/token-boosts/latest/v1",
+                "https://api.dexscreener.com/orders/v1/solana",
                 session=session,
-                metrics_tag="dexscreener:latest"
+                metrics_tag="dexscreener:trending"
             )
 
             tokens = []
+            # DexScreener returns pairs with boost status
             for item in data:
-                if item.get("chainId") == "solana":
-                    token_address = item.get("tokenAddress")
-                    if token_address and token_address not in self.discovered_tokens:
-                        tokens.append({
-                            "mint_address": token_address,
-                            "source": "dexscreener_latest",
-                            "discovered_at": datetime.utcnow().isoformat(),
-                            "metadata_hint": item
-                        })
-                        self.discovered_tokens.add(token_address)
+                pair_data = item.get("pair", {})
+                base_token = pair_data.get("baseToken", {})
+                token_address = base_token.get("address")
 
-            self.log.info(f"DexScreener: found {len(tokens)} new tokens")
+                if token_address and token_address not in self.discovered_tokens:
+                    # This token is trending/boosted = REAL activity!
+                    tokens.append({
+                        "mint_address": token_address,
+                        "source": "dexscreener_trending",
+                        "discovered_at": datetime.utcnow().isoformat(),
+                        "metadata_hint": {
+                            "symbol": base_token.get("symbol"),
+                            "name": base_token.get("name"),
+                            "price_usd": pair_data.get("priceUsd"),
+                            "liquidity_usd": pair_data.get("liquidity", {}).get("usd"),
+                            "volume_24h": pair_data.get("volume", {}).get("h24"),
+                            "price_change_24h": pair_data.get("priceChange", {}).get("h24"),
+                            "pair_address": pair_data.get("pairAddress"),
+                        }
+                    })
+                    self.discovered_tokens.add(token_address)
+
+            self.log.info(f"DexScreener trending: found {len(tokens)} new tokens")
             return tokens
 
         except Exception as e:
-            self.log.warning(f"DexScreener discovery failed: {e}")
-            return []
+            self.log.warning(f"DexScreener trending discovery failed: {e}")
+
+            # Fallback: Try getting tokens by searching for Solana pairs
+            try:
+                data = await self.http.get_json(
+                    "https://api.dexscreener.com/latest/dex/search?q=SOL",
+                    session=session,
+                    metrics_tag="dexscreener:search"
+                )
+
+                tokens = []
+                pairs = data.get("pairs", [])[:20]  # Get top 20
+
+                for pair in pairs:
+                    if pair.get("chainId") != "solana":
+                        continue
+
+                    base_token = pair.get("baseToken", {})
+                    token_address = base_token.get("address")
+
+                    if token_address and token_address not in self.discovered_tokens:
+                        tokens.append({
+                            "mint_address": token_address,
+                            "source": "dexscreener_search",
+                            "discovered_at": datetime.utcnow().isoformat(),
+                            "metadata_hint": {
+                                "symbol": base_token.get("symbol"),
+                                "name": base_token.get("name"),
+                                "price_usd": pair.get("priceUsd"),
+                                "liquidity_usd": pair.get("liquidity", {}).get("usd"),
+                            }
+                        })
+                        self.discovered_tokens.add(token_address)
+
+                self.log.info(f"DexScreener search fallback: found {len(tokens)} tokens")
+                return tokens
+
+            except Exception as e2:
+                self.log.warning(f"DexScreener search fallback also failed: {e2}")
+                return []
 
     async def discover_from_geckoterminal_new_pools(
         self, session: aiohttp.ClientSession

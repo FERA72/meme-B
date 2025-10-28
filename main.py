@@ -207,10 +207,12 @@ def start_external_feeds(
         for token_info in tokens:
             mint_address = token_info["mint_address"]
             source = token_info.get("source", "unknown")
+            dexscreener_url = f"https://dexscreener.com/solana/{mint_address}"
             print(f"[Discovery] New token from {source}: {mint_address}")
+            print(f"           DexScreener: {dexscreener_url}")
             # Process in separate thread to not block discovery
             Thread(
-                target=scanner.process_token,
+                target=scanner.process_mint_event,
                 args=(mint_address,),
                 kwargs={"context": token_info},
                 daemon=True
