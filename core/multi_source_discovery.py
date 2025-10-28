@@ -444,38 +444,41 @@ class DiscoveryScheduler:
         """Run discovery scheduler forever"""
         self.running = True
         self.log.info("Discovery scheduler started")
+        print("[Discovery Scheduler] Starting continuous discovery...")
 
         while self.running:
             now = time.time()
 
             # High priority sources (every 30 seconds)
             if now - self.last_runs["high_priority"] >= 30:
-                self.log.info("Running high-priority discovery...")
-                tokens = await self.discovery.discover_from_dexscreener_latest(
-                    aiohttp.ClientSession()
-                )
-                if tokens:
-                    await self.callback(tokens)
+                print(f"[Discovery Scheduler] Running high-priority discovery (DexScreener)...")
+                async with aiohttp.ClientSession() as session:
+                    tokens = await self.discovery.discover_from_dexscreener_latest(session)
+                    if tokens:
+                        print(f"[Discovery Scheduler] Found {len(tokens)} new tokens!")
+                        await self.callback(tokens)
+                    else:
+                        print(f"[Discovery Scheduler] No new tokens this round (already seen them)")
                 self.last_runs["high_priority"] = now
 
             # Medium priority sources (every 2 minutes)
             if now - self.last_runs["medium_priority"] >= 120:
-                self.log.info("Running medium-priority discovery...")
-                tokens = await self.discovery.discover_from_geckoterminal_new_pools(
-                    aiohttp.ClientSession()
-                )
-                if tokens:
-                    await self.callback(tokens)
+                print(f"[Discovery Scheduler] Running medium-priority discovery (GeckoTerminal)...")
+                async with aiohttp.ClientSession() as session:
+                    tokens = await self.discovery.discover_from_geckoterminal_new_pools(session)
+                    if tokens:
+                        print(f"[Discovery Scheduler] Found {len(tokens)} new tokens!")
+                        await self.callback(tokens)
                 self.last_runs["medium_priority"] = now
 
             # Low priority sources (every 5 minutes)
             if now - self.last_runs["low_priority"] >= 300:
-                self.log.info("Running low-priority discovery...")
-                tokens = await self.discovery.discover_from_birdeye_new_listings(
-                    aiohttp.ClientSession()
-                )
-                if tokens:
-                    await self.callback(tokens)
+                print(f"[Discovery Scheduler] Running low-priority discovery (Birdeye)...")
+                async with aiohttp.ClientSession() as session:
+                    tokens = await self.discovery.discover_from_birdeye_new_listings(session)
+                    if tokens:
+                        print(f"[Discovery Scheduler] Found {len(tokens)} new tokens!")
+                        await self.callback(tokens)
                 self.last_runs["low_priority"] = now
 
             # Sleep for 1 second between checks
