@@ -30,6 +30,7 @@ from core.pump_portal_stream import PumpPortalStream
 from core.rpc_scanner_improved import RPCScanner as GeckoScanner
 from core.scanner import TokenScanner
 from core.token_refresher import TokenRefresher
+from core.multi_source_discovery import MultiSourceDiscovery, DiscoveryScheduler
 from db.database import init_database, Database
 from ui.dashboard import Dashboard
 from webhook_server import init_webhook_server, run_webhook_server_async
@@ -196,6 +197,31 @@ def start_external_feeds(
         )
         gecko_thread.start()
         feeds["gecko_thread"] = gecko_thread
+
+    # MULTI-SOURCE DISCOVERY - Aggressive token discovery from ALL sources
+    print("[Feeds] Starting multi-source discovery (DexScreener + GeckoTerminal + Birdeye)...")
+    multi_discovery = MultiSourceDiscovery(helius_api_key=config["helius_api_key"])
+
+    async def handle_discovered_tokens(tokens):
+        """Callback for newly discovered tokens"""
+        for token_info in tokens:
+            mint_address = token_info["mint_address"]
+            source = token_info.get("source", "unknown")
+            print(f"[Discovery] New token from {source}: {mint_address}")
+            # Process in separate thread to not block discovery
+            Thread(
+                target=scanner.process_token,
+                args=(mint_address,),
+                kwargs={"context": token_info},
+                daemon=True
+            ).start()
+
+    # Start discovery scheduler in background
+    discovery_scheduler = DiscoveryScheduler(multi_discovery, handle_discovered_tokens)
+    discovery_scheduler.start_background()
+    feeds["multi_discovery"] = multi_discovery
+    feeds["discovery_scheduler"] = discovery_scheduler
+    print("[Feeds] Multi-source discovery online - scanning every 30s!")
 
     refresher = TokenRefresher(
         database=db,
