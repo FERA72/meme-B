@@ -115,8 +115,8 @@ class MultiSourceDiscovery:
                 import time
                 age_hours = (time.time() * 1000 - pair_created) / (1000 * 60 * 60) if pair_created else 999
 
-                # Only tokens created in last 24 hours
-                if age_hours > 24:
+                # Only tokens created in last 2 HOURS (fresh new tokens only!)
+                if age_hours > 2:
                     continue
 
                 tokens.append({
