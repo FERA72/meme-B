@@ -204,6 +204,8 @@ def start_external_feeds(
 
     async def handle_discovered_tokens(tokens):
         """Callback for newly discovered tokens"""
+        loop = asyncio.get_event_loop()
+
         for token_info in tokens:
             mint_address = token_info["mint_address"]
             source = token_info.get("source", "unknown")
@@ -216,9 +218,14 @@ def start_external_feeds(
                 print(f"           ⚠️  Already processed, skipping")
                 continue
 
-            # Process immediately (not in thread) for better error visibility
+            # Run sync scanner in thread executor to avoid event loop conflicts
             try:
-                result = scanner.process_mint_event(mint_address, context=token_info)
+                result = await loop.run_in_executor(
+                    None,
+                    scanner.process_mint_event,
+                    mint_address,
+                    token_info
+                )
                 if result:
                     print(f"           ✅ Processed successfully!")
                 else:
