@@ -84,88 +84,105 @@ class MultiSourceDiscovery:
         self, session: aiohttp.ClientSession
     ) -> List[Dict]:
         """
-        Discover HOT/TRENDING tokens from DexScreener.
-        This gets REAL tokens that are trading NOW.
+        Discover NEWLY CREATED tokens from DexScreener.
+        Gets tokens created in the LAST FEW HOURS - TRUE real-time discovery!
         """
         await self._check_rate_limit("dexscreener")
 
+        tokens = []
+
+        # METHOD 1: Get latest pairs sorted by creation time
         try:
-            # Get trending pairs for Solana - these are REAL active tokens
+            # This gets pairs sorted by age (newest first)
             data = await self.http.get_json(
-                "https://api.dexscreener.com/orders/v1/solana",
+                "https://api.dexscreener.com/latest/dex/pairs/solana",
                 session=session,
-                metrics_tag="dexscreener:trending"
+                metrics_tag="dexscreener:latest_pairs"
             )
 
-            tokens = []
-            # DexScreener returns pairs with boost status
-            for item in data:
-                pair_data = item.get("pair", {})
-                base_token = pair_data.get("baseToken", {})
+            pairs = data.get("pairs", [])[:50]  # Get 50 newest
+
+            for pair in pairs:
+                base_token = pair.get("baseToken", {})
+                token_address = base_token.get("address")
+
+                # Skip if we've seen it before
+                if not token_address or token_address in self.discovered_tokens:
+                    continue
+
+                # Get pair age
+                pair_created = pair.get("pairCreatedAt", 0)
+                import time
+                age_hours = (time.time() * 1000 - pair_created) / (1000 * 60 * 60) if pair_created else 999
+
+                # Only tokens created in last 24 hours
+                if age_hours > 24:
+                    continue
+
+                tokens.append({
+                    "mint_address": token_address,
+                    "source": "dexscreener_latest_pairs",
+                    "discovered_at": datetime.utcnow().isoformat(),
+                    "age_hours": age_hours,
+                    "metadata_hint": {
+                        "symbol": base_token.get("symbol"),
+                        "name": base_token.get("name"),
+                        "price_usd": pair.get("priceUsd"),
+                        "liquidity_usd": pair.get("liquidity", {}).get("usd"),
+                        "volume_24h": pair.get("volume", {}).get("h24"),
+                        "price_change_24h": pair.get("priceChange", {}).get("h24"),
+                        "pair_address": pair.get("pairAddress"),
+                        "pair_created_at": pair_created,
+                    }
+                })
+                self.discovered_tokens.add(token_address)
+
+            if tokens:
+                self.log.info(f"DexScreener latest pairs: found {len(tokens)} new tokens")
+                return tokens
+
+        except Exception as e:
+            self.log.warning(f"DexScreener latest pairs failed: {e}")
+
+        # METHOD 2: Search for recent Solana activity
+        try:
+            # Search returns active tokens
+            data = await self.http.get_json(
+                "https://api.dexscreener.com/latest/dex/search?q=SOL",
+                session=session,
+                metrics_tag="dexscreener:search"
+            )
+
+            pairs = data.get("pairs", [])[:30]  # Get top 30
+
+            for pair in pairs:
+                if pair.get("chainId") != "solana":
+                    continue
+
+                base_token = pair.get("baseToken", {})
                 token_address = base_token.get("address")
 
                 if token_address and token_address not in self.discovered_tokens:
-                    # This token is trending/boosted = REAL activity!
                     tokens.append({
                         "mint_address": token_address,
-                        "source": "dexscreener_trending",
+                        "source": "dexscreener_search",
                         "discovered_at": datetime.utcnow().isoformat(),
                         "metadata_hint": {
                             "symbol": base_token.get("symbol"),
                             "name": base_token.get("name"),
-                            "price_usd": pair_data.get("priceUsd"),
-                            "liquidity_usd": pair_data.get("liquidity", {}).get("usd"),
-                            "volume_24h": pair_data.get("volume", {}).get("h24"),
-                            "price_change_24h": pair_data.get("priceChange", {}).get("h24"),
-                            "pair_address": pair_data.get("pairAddress"),
+                            "price_usd": pair.get("priceUsd"),
+                            "liquidity_usd": pair.get("liquidity", {}).get("usd"),
                         }
                     })
                     self.discovered_tokens.add(token_address)
 
-            self.log.info(f"DexScreener trending: found {len(tokens)} new tokens")
-            return tokens
+            if tokens:
+                self.log.info(f"DexScreener search: found {len(tokens)} tokens")
 
-        except Exception as e:
-            self.log.warning(f"DexScreener trending discovery failed: {e}")
+        except Exception as e2:
+            self.log.warning(f"DexScreener search also failed: {e2}")
 
-            # Fallback: Try getting tokens by searching for Solana pairs
-            try:
-                data = await self.http.get_json(
-                    "https://api.dexscreener.com/latest/dex/search?q=SOL",
-                    session=session,
-                    metrics_tag="dexscreener:search"
-                )
-
-                tokens = []
-                pairs = data.get("pairs", [])[:20]  # Get top 20
-
-                for pair in pairs:
-                    if pair.get("chainId") != "solana":
-                        continue
-
-                    base_token = pair.get("baseToken", {})
-                    token_address = base_token.get("address")
-
-                    if token_address and token_address not in self.discovered_tokens:
-                        tokens.append({
-                            "mint_address": token_address,
-                            "source": "dexscreener_search",
-                            "discovered_at": datetime.utcnow().isoformat(),
-                            "metadata_hint": {
-                                "symbol": base_token.get("symbol"),
-                                "name": base_token.get("name"),
-                                "price_usd": pair.get("priceUsd"),
-                                "liquidity_usd": pair.get("liquidity", {}).get("usd"),
-                            }
-                        })
-                        self.discovered_tokens.add(token_address)
-
-                self.log.info(f"DexScreener search fallback: found {len(tokens)} tokens")
-                return tokens
-
-            except Exception as e2:
-                self.log.warning(f"DexScreener search fallback also failed: {e2}")
-                return []
+        return tokens
 
     async def discover_from_geckoterminal_new_pools(
         self, session: aiohttp.ClientSession
@@ -446,8 +463,18 @@ class DiscoveryScheduler:
         self.log.info("Discovery scheduler started")
         print("[Discovery Scheduler] Starting continuous discovery...")
 
+        # Track when we last cleared the cache
+        last_cache_clear = time.time()
+
         while self.running:
             now = time.time()
+
+            # Clear discovery cache every 5 minutes to allow re-discovering trending tokens
+            if now - last_cache_clear > 300:  # 5 minutes
+                cache_size = len(self.discovery.discovered_tokens)
+                self.discovery.discovered_tokens.clear()
+                print(f"[Discovery Scheduler] Cleared {cache_size} tokens from cache - will re-discover trending ones!")
+                last_cache_clear = now
 
             # High priority sources (every 30 seconds)
             if now - self.last_runs["high_priority"] >= 30:
@@ -458,11 +485,11 @@ class DiscoveryScheduler:
                         print(f"[Discovery Scheduler] Found {len(tokens)} new tokens!")
                         await self.callback(tokens)
                     else:
-                        print(f"[Discovery Scheduler] No new tokens this round (already seen them)")
+                        print(f"[Discovery Scheduler] No new tokens this round (already seen or none available)")
                 self.last_runs["high_priority"] = now
 
-            # Medium priority sources (every 2 minutes)
-            if now - self.last_runs["medium_priority"] >= 120:
+            # Medium priority sources (every 1 minute - increased from 2)
+            if now - self.last_runs["medium_priority"] >= 60:
                 print(f"[Discovery Scheduler] Running medium-priority discovery (GeckoTerminal)...")
                 async with aiohttp.ClientSession() as session:
                     tokens = await self.discovery.discover_from_geckoterminal_new_pools(session)
@@ -471,8 +498,8 @@ class DiscoveryScheduler:
                         await self.callback(tokens)
                 self.last_runs["medium_priority"] = now
 
-            # Low priority sources (every 5 minutes)
-            if now - self.last_runs["low_priority"] >= 300:
+            # Low priority sources (every 2 minutes - increased from 5)
+            if now - self.last_runs["low_priority"] >= 120:
                 print(f"[Discovery Scheduler] Running low-priority discovery (Birdeye)...")
                 async with aiohttp.ClientSession() as session:
                     tokens = await self.discovery.discover_from_birdeye_new_listings(session)
