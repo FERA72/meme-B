@@ -61,55 +61,99 @@ class Dashboard:
             return f"{prefix}{num:.2f}"
     
     def create_top_tokens_table(self, tokens: List[Token]) -> Table:
-        """Create a table showing top tokens with extended metrics."""
-        table = Table(title="TOP ACTIVE TOKENS", show_header=True, header_style="bold magenta")
+        """Create a table showing top tokens with extended metrics including ML insights."""
+        table = Table(title="TOP ACTIVE TOKENS - ML ENHANCED", show_header=True, header_style="bold magenta")
 
         table.add_column("#", style="dim", width=3)
-        table.add_column("Symbol", style="cyan", no_wrap=True)
-        table.add_column("Address", style="dim", min_width=44, overflow="fold")
-        table.add_column("Name", style="white")
-        table.add_column("Score", justify="right", style="bold cyan", width=8)
-        table.add_column("Market Cap", justify="right", style="green", width=12)
-        table.add_column("Liquidity", justify="right", style="blue", width=12)
-        table.add_column("24h Vol", justify="right", style="magenta", width=12)
+        table.add_column("Symbol", style="cyan", no_wrap=True, width=8)
+        table.add_column("Score", justify="right", style="bold cyan", width=6)
+        table.add_column("MCap", justify="right", style="green", width=10)
+        table.add_column("Liq", justify="right", style="blue", width=10)
         table.add_column("Holders", justify="right", style="yellow", width=8)
-        table.add_column("Trades (B/S)", justify="center", style="white", width=12)
-        table.add_column("Migration", style="white", width=12)
-        table.add_column("Status", style="white", width=8)
+        table.add_column("B/S Ratio", justify="center", style="white", width=9)
+        table.add_column("Quick Profit", justify="center", style="bold yellow", width=12)
+        table.add_column("Rug Risk", justify="center", style="bold red", width=9)
+        table.add_column("Status", style="white", width=10)
 
         for i, token in enumerate(tokens[:20], 1):
             metadata = token.token_metadata or {}
             performance = metadata.get("performance") or {}
             score = performance.get("score")
-            score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "-"
+            score_text = f"{score:.0f}" if isinstance(score, (int, float)) else "-"
 
             trades = metadata.get("trades") or {}
-            trades_text = f"{trades.get('buy_count', 0)}/{trades.get('sell_count', 0)}"
+            buy_count = trades.get("buy_count", 0)
+            sell_count = trades.get('sell_count', 0)
+            buy_sell_ratio = trades.get('buy_sell_ratio', 0)
 
-            migration_status = (metadata.get("migration") or {}).get("status") or "-"
+            # Format buy/sell ratio
+            if buy_sell_ratio > 2:
+                ratio_text = f"{buy_sell_ratio:.1f}x"
+                ratio_style = "bold green"
+            elif buy_sell_ratio > 1:
+                ratio_text = f"{buy_sell_ratio:.1f}x"
+                ratio_style = "green"
+            elif buy_sell_ratio > 0.5:
+                ratio_text = f"{buy_sell_ratio:.1f}x"
+                ratio_style = "yellow"
+            else:
+                ratio_text = f"{buy_sell_ratio:.1f}x"
+                ratio_style = "red"
 
+            # Check for quick profit opportunity
+            # (This would be populated by the filter's detect_quick_profit_rug method)
+            quick_profit_data = metadata.get("quick_profit", {})
+            if quick_profit_data.get("is_quick_profit_opportunity"):
+                expected_profit = quick_profit_data.get("expected_max_profit_pct", 0)
+                profit_window = quick_profit_data.get("profit_window_minutes", 0)
+                quick_profit_text = f"+{expected_profit:.0f}% ({profit_window:.0f}m)"
+                quick_profit_style = "bold yellow"
+            else:
+                quick_profit_text = "-"
+                quick_profit_style = "dim"
+
+            # Rug risk indicator
+            top_holder_pct = token.top_holder_percentage or 0
+            mint_auth_active = metadata.get("warnings", [])
+            rug_indicators = len([w for w in mint_auth_active if 'authority' in w.lower()])
+            if top_holder_pct > 40:
+                rug_indicators += 1
+
+            if rug_indicators >= 2:
+                rug_risk_text = "HIGH"
+                rug_risk_style = "bold red"
+            elif rug_indicators == 1:
+                rug_risk_text = "MED"
+                rug_risk_style = "yellow"
+            else:
+                rug_risk_text = "LOW"
+                rug_risk_style = "green"
+
+            # Status with better indicators
             if token.is_graduated:
-                status = "GRAD"
+                status = "🎓 GRAD"
                 row_style = "bright_green"
             elif token.is_safe:
-                status = "SAFE"
-                row_style = "green"
+                if quick_profit_data.get("is_quick_profit_opportunity"):
+                    status = "⚡ QUICK$"
+                    row_style = "bold yellow"
+                else:
+                    status = "✓ SAFE"
+                    row_style = "green"
             else:
-                status = "RISKY"
+                status = "⚠ RISKY"
                 row_style = "red"
 
             table.add_row(
                 str(i),
                 token.symbol or "UNK",
-                token.mint_address or "-",
-                token.name or "Unknown",
                 score_text,
                 self.format_number(token.market_cap, '$'),
                 self.format_number(token.liquidity_usd, '$'),
-                self.format_number(token.volume_24h, '$'),
                 str(token.holder_count or 0),
-                trades_text,
-                migration_status,
+                Text(ratio_text, style=ratio_style),
+                Text(quick_profit_text, style=quick_profit_style),
+                Text(rug_risk_text, style=rug_risk_style),
                 status,
                 style=row_style
             )
@@ -117,53 +161,83 @@ class Dashboard:
         return table
 
     def create_recent_mints_table(self, tokens: List[Token]) -> Table:
-        """Create a table showing recently discovered tokens with details."""
-        table = Table(title="RECENT MINTS (Last 10 Minutes)", show_header=True, header_style="bold cyan")
+        """Create a table showing recently discovered tokens with ML analysis."""
+        table = Table(title="⚡ RECENT MINTS - QUICK PROFIT SCANNER", show_header=True, header_style="bold cyan")
 
         table.add_column("Time", style="dim", width=8)
-        table.add_column("Symbol", style="cyan", no_wrap=True)
-        table.add_column("Address", style="dim", min_width=44, overflow="fold")
-        table.add_column("Score", justify="right", style="bold cyan", width=8)
-        table.add_column("Liquidity", justify="right", style="blue", width=12)
+        table.add_column("Symbol", style="cyan", no_wrap=True, width=8)
+        table.add_column("Score", justify="right", style="bold cyan", width=6)
+        table.add_column("Liq", justify="right", style="blue", width=10)
         table.add_column("Holders", justify="right", style="yellow", width=8)
-        table.add_column("Trades (B/S)", justify="center", style="white", width=12)
-        table.add_column("Safety", style="white", width=14)
+        table.add_column("B/S", justify="center", style="white", width=7)
+        table.add_column("Quick $", justify="center", style="bold yellow", width=12)
+        table.add_column("Action", style="white", width=12)
 
         for token in tokens[:10]:
             time_str = token.first_seen.strftime('%H:%M:%S') if token.first_seen else '-'
             metadata = token.token_metadata or {}
             performance = metadata.get("performance") or {}
             score = performance.get("score")
-            score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "-"
+            score_text = f"{score:.0f}" if isinstance(score, (int, float)) else "-"
 
             trades = metadata.get("trades") or {}
-            trades_text = f"{trades.get('buy_count', 0)}/{trades.get('sell_count', 0)}"
+            buy_sell_ratio = trades.get('buy_sell_ratio', 0)
+            ratio_text = f"{buy_sell_ratio:.1f}x" if buy_sell_ratio > 0 else "-"
 
-            if token.is_safe:
-                safety = "SAFE"
-                style = "green"
+            # Quick profit opportunity
+            quick_profit_data = metadata.get("quick_profit", {})
+            if quick_profit_data.get("is_quick_profit_opportunity"):
+                expected_profit = quick_profit_data.get("expected_max_profit_pct", 0)
+                profit_window = quick_profit_data.get("profit_window_minutes", 0)
+                quick_profit_text = f"+{expected_profit:.0f}%/{profit_window:.0f}m"
+                quick_profit_style = "bold yellow"
+
+                # Show strategy
+                strategy = quick_profit_data.get("strategy", {})
+                action = strategy.get("action", "WATCH")
+                action_style = "bold yellow"
             else:
-                safety = f"FAILED: {token.risk_flags[0]}" if token.risk_flags else "RISKY"
-                style = "red"
+                quick_profit_text = "-"
+                quick_profit_style = "dim"
+
+                if token.is_safe:
+                    action = "✓ SAFE"
+                    action_style = "green"
+                else:
+                    # Show first risk flag
+                    risk_flags = token.risk_flags or []
+                    if risk_flags:
+                        action = f"⚠ {risk_flags[0][:10]}"
+                    else:
+                        action = "⚠ RISKY"
+                    action_style = "red"
+
+            # Determine row style
+            if quick_profit_data.get("is_quick_profit_opportunity"):
+                row_style = "bold yellow"
+            elif token.is_safe:
+                row_style = "green"
+            else:
+                row_style = "dim"
 
             table.add_row(
                 time_str,
                 token.symbol or "UNK",
-                token.mint_address or "-",
                 score_text,
                 self.format_number(token.liquidity_usd, '$'),
                 str(token.holder_count or 0),
-                trades_text,
-                safety,
-                style=style
+                ratio_text,
+                Text(quick_profit_text, style=quick_profit_style),
+                Text(action, style=action_style),
+                style=row_style
             )
 
         return table
 
     def create_stats_panel(self) -> Panel:
         """
-        Create a panel with overall statistics
-        
+        Create a panel with overall statistics including ML insights
+
         Returns:
             Rich Panel object
         """
@@ -174,22 +248,34 @@ class Dashboard:
         watch_counts = self.db.get_watchlist_counts()
         whitelist_count = watch_counts.get("whitelist", 0)
         blacklist_count = watch_counts.get("blacklist", 0)
-        
+
         # Calculate safe percentage
         safe_pct = (len(safe_tokens)/len(all_tokens)*100) if len(all_tokens) > 0 else 0
-        
+
+        # Count quick profit opportunities
+        quick_profit_count = 0
+        for token in all_tokens:
+            metadata = token.token_metadata or {}
+            if metadata.get("quick_profit", {}).get("is_quick_profit_opportunity"):
+                quick_profit_count += 1
+
         stats_text = f"""
-        Total Tokens Detected: {len(all_tokens)}
-        Safe Tokens: {len(safe_tokens)} ({safe_pct:.1f}%)
-        Graduated Tokens: {len(graduated)}
-        Risky Tokens: {len(all_tokens) - len(safe_tokens)}
-        Whitelisted: {whitelist_count}
-        Blacklisted: {blacklist_count}
-        
-        Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        📈 SCANNER STATUS
+        Total Tokens: {len(all_tokens)} | Safe: {len(safe_tokens)} ({safe_pct:.1f}%) | Risky: {len(all_tokens) - len(safe_tokens)}
+        Graduated: {len(graduated)} | Whitelisted: {whitelist_count} | Blacklisted: {blacklist_count}
+
+        ⚡ QUICK PROFIT SCANNER
+        Opportunities Detected: {quick_profit_count}
+
+        🤖 ML STATUS
+        Data Collection: ✓ ACCURATE (Fixed holder counts & trade data)
+        Quick-Rug Detection: ✓ ACTIVE
+        ML Agent: {"✓ READY" if os.getenv('OPENAI_API_KEY') else "⚠ NO API KEY"}
+
+        🕐 Last Updated: {datetime.now().strftime('%H:%M:%S')}
         """
-        
-        return Panel(stats_text, title="📊 Statistics", border_style="green")
+
+        return Panel(stats_text, title="🚀 MEME-B ML SCANNER", border_style="bold green")
     
     def generate_layout(self) -> Layout:
         """

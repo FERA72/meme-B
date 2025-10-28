@@ -248,14 +248,37 @@ class DataCollector:
             pairs,
             key=lambda item: self._safe_float(item.get("liquidity", {}).get("usd")),
         )
+
+        # Extract trade data for ML analysis
+        txns = best_pair.get("txns", {}) or {}
+        h24_txns = txns.get("h24", {}) or {}
+        m5_txns = txns.get("m5", {}) or {}
+
+        # Get buy/sell counts from different timeframes
+        buy_count_24h = int(self._safe_float(h24_txns.get("buys", 0)))
+        sell_count_24h = int(self._safe_float(h24_txns.get("sells", 0)))
+        buy_count_5m = int(self._safe_float(m5_txns.get("buys", 0)))
+        sell_count_5m = int(self._safe_float(m5_txns.get("sells", 0)))
+
         dex_info = {
             "liquidity_usd": self._safe_float(best_pair.get("liquidity", {}).get("usd")),
             "price_usd": self._safe_float(best_pair.get("priceUsd")),
             "volume_24h": self._safe_float(best_pair.get("volume", {}).get("h24")),
+            "volume_5m": self._safe_float(best_pair.get("volume", {}).get("m5")),
             "market_cap": self._safe_float(best_pair.get("fdv")),
             "pool_address": best_pair.get("pairAddress"),
             "dex_name": best_pair.get("dexId", "unknown"),
             "price_change_24h": self._safe_float(best_pair.get("priceChange", {}).get("h24")),
+            "price_change_5m": self._safe_float(best_pair.get("priceChange", {}).get("m5")),
+
+            # Trade counts - CRITICAL for quick-profit detection
+            "buy_count_24h": buy_count_24h,
+            "sell_count_24h": sell_count_24h,
+            "buy_count_5m": buy_count_5m,
+            "sell_count_5m": sell_count_5m,
+            "total_trades_24h": buy_count_24h + sell_count_24h,
+            "buy_sell_ratio_24h": buy_count_24h / max(sell_count_24h, 1) if sell_count_24h > 0 else buy_count_24h,
+
             "raw": self._trim_payload(best_pair),
         }
         self._cache_set("dex_data", mint_address, dex_info, ttl=45)
@@ -327,6 +350,12 @@ class DataCollector:
     async def _fetch_holder_data(
         self, mint_address: str, session: aiohttp.ClientSession
     ) -> Dict[str, Any]:
+        """
+        Fetch holder data - FIXED VERSION
+
+        IMPORTANT: getTokenLargestAccounts only returns TOP holders (max 20),
+        NOT the total holder count! We need to use getProgramAccounts or external APIs.
+        """
         try:
             accounts, accounts_raw = await self._fetch_token_accounts(mint_address, session)
         except HttpError as exc:
@@ -343,12 +372,16 @@ class DataCollector:
             self.log.debug("Token supply fetch failed for %s: %s", mint_address, exc)
             supply, supply_raw = 0.0, {}
 
+        # Try to get ACTUAL holder count using getProgramAccounts
+        actual_holder_count = await self._get_actual_holder_count(mint_address, session)
+
         if not accounts:
             return {
-                "holder_count": 0,
+                "holder_count": actual_holder_count or 0,
                 "top_holder_percentage": 0.0,
                 "supply": supply,
                 "raw": {"accounts": accounts_raw, "supply": supply_raw},
+                "holder_count_source": "rpc_program_accounts" if actual_holder_count else "none"
             }
 
         total_known = sum(self._safe_float(acc.get("uiAmount")) for acc in accounts)
@@ -359,13 +392,81 @@ class DataCollector:
             top_holder = max(accounts, key=lambda acc: self._safe_float(acc.get("uiAmount")))
             top_pct = (self._safe_float(top_holder.get("uiAmount")) / effective_supply) * 100
 
+        # Use actual count if available, otherwise use len(accounts) as MINIMUM
+        holder_count = actual_holder_count if actual_holder_count else len(accounts)
+
         holder_summary = {
-            "holder_count": len(accounts),
+            "holder_count": holder_count,
             "top_holder_percentage": top_pct,
             "supply": effective_supply,
             "raw": {"accounts": accounts_raw, "supply": supply_raw},
+            "holder_count_source": "rpc_program_accounts" if actual_holder_count else "top_accounts_only",
+            "holder_count_is_estimate": actual_holder_count is None
         }
         return holder_summary
+
+    async def _get_actual_holder_count(
+        self, mint_address: str, session: aiohttp.ClientSession
+    ) -> Optional[int]:
+        """
+        Get ACTUAL holder count using getProgramAccounts
+
+        This queries the Token Program for all accounts holding this mint.
+        WARNING: This can be expensive for tokens with many holders!
+        """
+        cached = self._cache_get("actual_holder_count", mint_address)
+        if cached:
+            return cached
+
+        try:
+            # Query the Token Program for all accounts with this mint
+            data = await self._rpc_post(
+                "getProgramAccounts",
+                [
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",  # SPL Token Program
+                    {
+                        "encoding": "jsonParsed",
+                        "filters": [
+                            {
+                                "dataSize": 165  # Size of token account
+                            },
+                            {
+                                "memcmp": {
+                                    "offset": 0,
+                                    "bytes": mint_address  # Filter by mint address
+                                }
+                            }
+                        ]
+                    }
+                ],
+                session
+            )
+
+            accounts = data.get("result", []) or []
+
+            # Count only accounts with non-zero balance
+            holder_count = 0
+            for account in accounts:
+                try:
+                    parsed = account.get("account", {}).get("data", {}).get("parsed", {})
+                    info = parsed.get("info", {})
+                    token_amount = info.get("tokenAmount", {})
+                    amount = self._safe_float(token_amount.get("uiAmount", 0))
+
+                    if amount > 0:
+                        holder_count += 1
+                except:
+                    continue
+
+            if holder_count > 0:
+                self._cache_set("actual_holder_count", mint_address, holder_count, ttl=60)
+                return holder_count
+
+            return None
+
+        except Exception as exc:
+            self.log.debug("getProgramAccounts failed for %s: %s", mint_address, exc)
+            return None
 
     async def get_sol_price_async(self, session: aiohttp.ClientSession) -> Optional[float]:
         cached = self._cache_get("sol_price", "latest")
@@ -511,10 +612,25 @@ class DataCollector:
             source_payloads["mint_authority"] = authority_info.get("raw")
 
         if isinstance(dex_data, dict):
+            # Core metrics
             result.update({k: dex_data[k] for k in ("liquidity_usd", "price_usd", "volume_24h", "market_cap") if k in dex_data})
             result["initial_liquidity"] = dex_data.get("liquidity_usd", 0)
             result.setdefault("pool_address", dex_data.get("pool_address"))
             result.setdefault("dex_name", dex_data.get("dex_name"))
+
+            # Trade data for ML - store in token_metadata.trades
+            trades_data = {
+                "buy_count": dex_data.get("buy_count_24h", 0),
+                "sell_count": dex_data.get("sell_count_24h", 0),
+                "buy_count_5m": dex_data.get("buy_count_5m", 0),
+                "sell_count_5m": dex_data.get("sell_count_5m", 0),
+                "total_trades": dex_data.get("total_trades_24h", 0),
+                "buy_sell_ratio": dex_data.get("buy_sell_ratio_24h", 0),
+                "volume_5m": dex_data.get("volume_5m", 0),
+                "price_change_5m": dex_data.get("price_change_5m", 0),
+            }
+            result["token_metadata"]["trades"] = trades_data
+
             source_payloads["dexscreener"] = dex_data.get("raw")
         elif "dex_hint" in context:
             dex_hint = context.get("dex_hint") or {}
