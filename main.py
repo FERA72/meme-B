@@ -210,13 +210,21 @@ def start_external_feeds(
             dexscreener_url = f"https://dexscreener.com/solana/{mint_address}"
             print(f"[Discovery] New token from {source}: {mint_address}")
             print(f"           DexScreener: {dexscreener_url}")
-            # Process in separate thread to not block discovery
-            Thread(
-                target=scanner.process_mint_event,
-                args=(mint_address,),
-                kwargs={"context": token_info},
-                daemon=True
-            ).start()
+
+            # Check if duplicate
+            if scanner.is_duplicate(mint_address):
+                print(f"           ⚠️  Already processed, skipping")
+                continue
+
+            # Process immediately (not in thread) for better error visibility
+            try:
+                result = scanner.process_mint_event(mint_address, context=token_info)
+                if result:
+                    print(f"           ✅ Processed successfully!")
+                else:
+                    print(f"           ❌ Processing failed (check logs)")
+            except Exception as e:
+                print(f"           ❌ Error: {e}")
 
     # Start discovery scheduler in background
     discovery_scheduler = DiscoveryScheduler(multi_discovery, handle_discovered_tokens)

@@ -62,16 +62,7 @@ class Dashboard:
     
     def create_top_tokens_table(self, tokens: List[Token]) -> Table:
         """Create a table showing top tokens with extended metrics including ML insights."""
-
-        # Print full DexScreener links to console (so user can copy them)
-        if tokens:
-            self.console.print("\n[bold cyan]📋 DexScreener Links (copy these!):[/bold cyan]")
-            for i, token in enumerate(tokens[:20], 1):
-                link = f"https://dexscreener.com/solana/{token.mint_address}"
-                self.console.print(f"  {i}. {token.symbol or 'UNK'}: [link={link}]{link}[/link]")
-            self.console.print("")
-
-        table = Table(title="TOP ACTIVE TOKENS - ML ENHANCED", show_header=True, header_style="bold magenta")
+        table = Table(title="TOP ACTIVE TOKENS - ML ENHANCED (Links in console log above)", show_header=True, header_style="bold magenta")
 
         table.add_column("#", style="dim", width=3)
         table.add_column("Symbol", style="cyan", no_wrap=True, width=8)
