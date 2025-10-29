@@ -31,7 +31,7 @@ from core.pump_portal_stream import PumpPortalStream
 from core.rpc_scanner_improved import RPCScanner as GeckoScanner
 from core.scanner import TokenScanner
 from core.token_refresher import TokenRefresher
-from core.multi_source_discovery import MultiSourceDiscovery, DiscoveryScheduler
+from core.direct_scrapers import DirectScraperOrchestrator
 from db.database import init_database, Database
 from ui.dashboard import Dashboard
 from webhook_server import init_webhook_server, run_webhook_server_async
@@ -199,19 +199,27 @@ def start_external_feeds(
         gecko_thread.start()
         feeds["gecko_thread"] = gecko_thread
 
-    # MULTI-SOURCE DISCOVERY - Aggressive token discovery from ALL sources
-    print("[Feeds] Starting multi-source discovery (DexScreener + GeckoTerminal + Birdeye)...")
-    multi_discovery = MultiSourceDiscovery(helius_api_key=config["helius_api_key"])
+    # DIRECT SCRAPER - Custom scrapers that go straight to the source
+    print("[Feeds] Starting DIRECT scrapers (Pump.fun + On-chain DEX monitoring)...")
+    rpc_url = f"https://mainnet.helius-rpc.com/?api-key={config['helius_api_key']}"
+    direct_scraper = DirectScraperOrchestrator(rpc_url=rpc_url)
 
     async def handle_discovered_tokens(tokens):
-        """Callback for newly discovered tokens"""
+        """Callback for newly discovered tokens from direct scrapers"""
         loop = asyncio.get_event_loop()
 
         for token_info in tokens:
             mint_address = token_info["mint_address"]
             source = token_info.get("source", "unknown")
+            symbol = token_info.get("symbol", "UNKNOWN")
+            name = token_info.get("name", "Unknown")
+
+            pumpfun_url = f"https://pump.fun/coin/{mint_address}"
             dexscreener_url = f"https://dexscreener.com/solana/{mint_address}"
-            print(f"[Discovery] New token from {source}: {mint_address}")
+
+            print(f"[Discovery] 🚀 NEW TOKEN from {source}: {symbol} ({name})")
+            print(f"           Mint: {mint_address}")
+            print(f"           Pump.fun: {pumpfun_url}")
             print(f"           DexScreener: {dexscreener_url}")
 
             # Check if duplicate
@@ -228,18 +236,27 @@ def start_external_feeds(
                     token_info
                 )
                 if result:
-                    print(f"           ✅ Processed successfully!")
+                    print(f"           ✅ Processed successfully! Added to dashboard")
                 else:
                     print(f"           ❌ Processing failed (check logs)")
             except Exception as e:
                 print(f"           ❌ Error: {e}")
 
-    # Start discovery scheduler in background
-    discovery_scheduler = DiscoveryScheduler(multi_discovery, handle_discovered_tokens)
-    discovery_scheduler.start_background()
-    feeds["multi_discovery"] = multi_discovery
-    feeds["discovery_scheduler"] = discovery_scheduler
-    print("[Feeds] Multi-source discovery online - scanning every 30s!")
+    # Start direct scraper in background (runs every 30 seconds)
+    def run_scraper_loop():
+        """Run the scraper in a background thread"""
+        async def discovery_loop():
+            await direct_scraper.run_continuous_discovery(
+                callback=handle_discovered_tokens,
+                interval=30  # Every 30 seconds
+            )
+        asyncio.run(discovery_loop())
+
+    scraper_thread = Thread(target=run_scraper_loop, daemon=True, name="DirectScraperThread")
+    scraper_thread.start()
+    feeds["direct_scraper"] = direct_scraper
+    feeds["scraper_thread"] = scraper_thread
+    print("[Feeds] Direct scrapers online - scanning Pump.fun every 30s!")
 
     refresher = TokenRefresher(
         database=db,
