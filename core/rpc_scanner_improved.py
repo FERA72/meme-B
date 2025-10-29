@@ -33,6 +33,14 @@ class RPCScanner:
         self.last_checked: Optional[float] = None
         self.log = get_logger("gecko_scanner")
 
+        # Default headers to avoid bot detection
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+
     # ------------------------------------------------------------------ #
     # Polling loop
     # ------------------------------------------------------------------ #
@@ -76,8 +84,27 @@ class RPCScanner:
         """
         Retrieve new pools and return formatted entries we haven't processed yet.
         """
-        response = requests.get(self.GECKO_NEW_POOLS_URL, timeout=10)
-        response.raise_for_status()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(self.GECKO_NEW_POOLS_URL, headers=self.headers, timeout=10)
+
+                # Check for HTML responses (Cloudflare protection)
+                if response.text and response.text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                    self.log.warning("Received HTML instead of JSON from GeckoTerminal (attempt %s/%s)", attempt + 1, max_retries)
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    return []
+
+                response.raise_for_status()
+                break
+            except (requests.RequestException, Exception) as exc:
+                self.log.warning("GeckoTerminal request failed (attempt %s/%s): %s", attempt + 1, max_retries, exc)
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                return []
 
         results = []
         data = response.json().get("data", [])
@@ -152,25 +179,42 @@ class RPCScanner:
         Fetch token metadata from GeckoTerminal, returning a dictionary with
         useful fields. Falls back gracefully if metadata is missing.
         """
-        try:
-            resp = requests.get(self.GECKO_TOKEN_URL.format(mint=mint), timeout=10)
-            if resp.status_code != 200:
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(self.GECKO_TOKEN_URL.format(mint=mint), headers=self.headers, timeout=10)
+                if resp.status_code != 200:
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return {}
+
+                # Check for HTML responses (Cloudflare protection)
+                if resp.text and resp.text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                    self.log.debug("Received HTML instead of JSON for token %s (attempt %s/%s)", mint, attempt + 1, max_retries)
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return {}
+
+                data = resp.json().get("data", {})
+                attributes = data.get("attributes", {})
+
+                return {
+                    "name": attributes.get("name"),
+                    "symbol": attributes.get("symbol"),
+                    "decimals": attributes.get("decimals"),
+                    "image_url": attributes.get("image_url"),
+                    "market_cap_usd": self._safe_float(attributes.get("market_cap_usd")),
+                    "fdv_usd": self._safe_float(attributes.get("fdv_usd")),
+                }
+            except Exception as exc:  # pragma: no cover - network issues
+                self.log.debug("Gecko metadata fetch failed for %s (attempt %s/%s): %s", mint, attempt + 1, max_retries, exc)
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
                 return {}
-
-            data = resp.json().get("data", {})
-            attributes = data.get("attributes", {})
-
-            return {
-                "name": attributes.get("name"),
-                "symbol": attributes.get("symbol"),
-                "decimals": attributes.get("decimals"),
-                "image_url": attributes.get("image_url"),
-                "market_cap_usd": self._safe_float(attributes.get("market_cap_usd")),
-                "fdv_usd": self._safe_float(attributes.get("fdv_usd")),
-            }
-        except Exception as exc:  # pragma: no cover - network issues
-            self.log.debug("Gecko metadata fetch failed for %s: %s", mint, exc)
-            return {}
+        return {}
 
     @staticmethod
     def _safe_float(value) -> float:

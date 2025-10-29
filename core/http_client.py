@@ -19,7 +19,7 @@ from urllib3.util.retry import Retry
 
 from core.metrics import METRICS
 
-_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+_RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504, 530}
 
 
 class HttpError(RuntimeError):
@@ -56,7 +56,16 @@ class HttpClient:
         self.backoff_factor = backoff_factor
         self.timeout = timeout
 
+        # Default headers to avoid bot detection
+        self.default_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+
         self._sync_session = requests.Session()
+        self._sync_session.headers.update(self.default_headers)
         retry = Retry(
             total=max_retries,
             read=max_retries,
@@ -93,9 +102,15 @@ class HttpClient:
         tag = metrics_tag or self._metric_tag(method, url)
         own_session = session is None
 
+        # Merge default headers with user-provided headers
+        merged_headers = dict(self.default_headers)
+        if "headers" in kwargs:
+            merged_headers.update(kwargs["headers"])
+        kwargs["headers"] = merged_headers
+
         if own_session:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
-            session = aiohttp.ClientSession(timeout=timeout)
+            session = aiohttp.ClientSession(timeout=timeout, headers=self.default_headers)
         else:
             timeout = session.timeout if hasattr(session, "timeout") else aiohttp.ClientTimeout(total=self.timeout)
 
@@ -122,6 +137,14 @@ class HttpClient:
                         data: Any
                         if parse_json:
                             try:
+                                # Detect HTML responses (e.g., Cloudflare protection pages)
+                                if text and text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                                    METRICS.record(tag, status, latency_ms, "html_response_error")
+                                    raise HttpError(
+                                        f"Received HTML instead of JSON from {url} (possible bot protection)",
+                                        status=status,
+                                        payload=text[:500]
+                                    )
                                 data = json.loads(text) if text else {}
                             except json.JSONDecodeError as exc:  # pragma: no cover - defensive
                                 METRICS.record(tag, status, latency_ms, "json_decode_error")
@@ -222,6 +245,15 @@ class HttpClient:
 
         if parse_json:
             try:
+                # Detect HTML responses (e.g., Cloudflare protection pages)
+                text = response.text
+                if text and text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                    METRICS.record(tag, status, latency_ms, "html_response_error")
+                    raise HttpError(
+                        f"Received HTML instead of JSON from {url} (possible bot protection)",
+                        status=status,
+                        payload=text[:500]
+                    )
                 data = response.json()
             except ValueError as exc:
                 raise HttpError(f"Failed to decode JSON from {url}", status=status) from exc

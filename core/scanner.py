@@ -211,7 +211,7 @@ class TokenScanner:
             latency = (time.perf_counter() - start) * 1000
             status = exc.status or 0
             METRICS.record("scanner:process", status, latency, err=str(exc))
-            transient = status in {0, 408, 429, 500, 502, 503, 504}
+            transient = status in {0, 408, 429, 500, 502, 503, 504, 530}
             if transient:
                 self._schedule_retry(mint_address, context, attempt, f"http_error:{status}")
             else:
