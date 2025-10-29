@@ -1,23 +1,8 @@
-# Core dependencies
-Flask==3.0.0
-SQLAlchemy==2.0.23
-psycopg2-binary==2.9.9
-python-dotenv==1.0.0
+# Minimal requirements for Pump.fun profit scanner
+# Only what we actually need - nothing more
 
-# API and HTTP clients
-requests==2.31.0
+# HTTP client for API calls
 aiohttp==3.9.1
 
-# Terminal UI
+# Terminal UI dashboard
 rich==13.7.0
-
-# Realtime streaming
-websockets==11.0.3
-
-# Data processing (optional but recommended)
-pandas==2.1.4
-
-# Testing and development
-pytest==7.4.3
-
-openai>=1.12.0
