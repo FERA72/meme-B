@@ -17,7 +17,7 @@ from solders.pubkey import Pubkey
 from solders.rpc.responses import GetProgramAccountsResp
 import logging
 
-from core.http_utils import HTTPMetrics
+from core.http_client import HttpClient
 from core.logging_config import get_logger
 
 
@@ -33,7 +33,7 @@ class PumpFunScraper:
 
     def __init__(self, rpc_url: str):
         self.rpc_url = rpc_url
-        self.http = HTTPMetrics()
+        self.http = HttpClient("pumpfun_scraper")
         self.log = get_logger("pumpfun_scraper")
         self.seen_tokens: Set[str] = set()
 
