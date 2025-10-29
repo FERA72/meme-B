@@ -18,7 +18,7 @@ from solders.rpc.responses import GetProgramAccountsResp
 import logging
 
 from core.http_client import HttpClient
-from core.logging_config import get_logger
+from core.logger import get_logger
 
 
 class PumpFunScraper:
