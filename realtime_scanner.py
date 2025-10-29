@@ -30,40 +30,79 @@ class RealtimePumpScanner:
         Fetches more tokens (100) to ensure we catch everything.
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            # Headers to bypass Cloudflare
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Origin': 'https://pump.fun',
+                'Referer': 'https://pump.fun/',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-site',
+            }
+
+            async with aiohttp.ClientSession(headers=headers) as session:
                 url = f"{self.api_url}/coins"
                 params = {
-                    "sort": "created_timestamp",
-                    "order": "desc",
                     "limit": limit,
-                    "offset": 0
+                    "offset": 0,
+                    "sort": "created_timestamp",
+                    "order": "DESC",
+                    "includeNsfw": "true"
                 }
 
-                timeout = aiohttp.ClientTimeout(total=5)
-                async with session.get(url, params=params, timeout=timeout) as resp:
-                    if resp.status != 200:
-                        print(f"[ERROR] API returned {resp.status}")
-                        return []
+                timeout = aiohttp.ClientTimeout(total=10)
 
-                    data = await resp.json()
+                try:
+                    async with session.get(url, params=params, timeout=timeout) as resp:
+                        print(f"[DEBUG] API Status: {resp.status}")
 
-                    # Filter for NEW tokens only
-                    new_tokens = []
-                    for coin in data:
-                        mint = coin.get("mint")
-                        if not mint or mint in self.seen_tokens:
-                            continue
+                        if resp.status != 200:
+                            text = await resp.text()
+                            print(f"[ERROR] API returned {resp.status}: {text[:200]}")
+                            return []
 
-                        self.seen_tokens.add(mint)
-                        new_tokens.append(coin)
+                        data = await resp.json()
+                        print(f"[DEBUG] Got data type: {type(data)}, Length: {len(data) if isinstance(data, list) else 'N/A'}")
 
-                    return new_tokens
+                        # Handle response (should be a list)
+                        if not isinstance(data, list):
+                            print(f"[ERROR] Unexpected data format: {data}")
+                            return []
+
+                        # Filter for NEW tokens only
+                        new_tokens = []
+                        for coin in data:
+                            mint = coin.get("mint")
+                            if not mint:
+                                continue
+
+                            if mint in self.seen_tokens:
+                                continue
+
+                            self.seen_tokens.add(mint)
+                            new_tokens.append(coin)
+
+                            # Debug first token
+                            if len(new_tokens) == 1:
+                                print(f"[DEBUG] First token: {coin.get('symbol')} - {coin.get('name')} (mint: {mint[:8]}...)")
+
+                        return new_tokens
+
+                except aiohttp.ClientError as e:
+                    print(f"[ERROR] Client error: {e}")
+                    return []
 
         except asyncio.TimeoutError:
             print("[ERROR] API timeout")
             return []
         except Exception as e:
             print(f"[ERROR] Scanner failed: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     async def get_token_details(self, mint: str) -> Optional[Dict]:
@@ -157,12 +196,20 @@ class RealtimePumpScanner:
 
         check_count = 0
         total_found = 0
+        last_cache_clear = time.time()
 
         while True:
             check_count += 1
             start_time = time.time()
 
             try:
+                # Clear cache every 5 minutes to allow re-discovery
+                if time.time() - last_cache_clear > 300:
+                    cache_size = len(self.seen_tokens)
+                    self.seen_tokens.clear()
+                    print(f"[REALTIME] Cleared cache ({cache_size} tokens) - will re-discover trending tokens")
+                    last_cache_clear = time.time()
+
                 # Get latest tokens
                 new_tokens = await self.get_latest_tokens(limit=100)
 
@@ -191,6 +238,8 @@ class RealtimePumpScanner:
 
             except Exception as e:
                 print(f"[ERROR] Monitor loop error: {e}")
+                import traceback
+                traceback.print_exc()
                 await asyncio.sleep(5)  # Wait longer on error
 
 
